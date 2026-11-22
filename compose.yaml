@@ -1,0 +1,20 @@
+services:
+  loongarch-vm:
+    image: docker-qemu-loongarch
+    build: .
+    container_name: loongarch-vm
+    restart: unless-stopped
+    stop_grace_period: 2m          # TCG 下 guest 优雅关机需要时间
+    ports:
+      - "8006:8006"                # noVNC 控制台
+      - "22:22"                    # SSH → guest
+    volumes:
+      # 磁盘镜像（qcow2/raw 自动识别）——换成你的镜像路径
+      - ./data.qcow2:/storage/data.qcow2
+    environment:
+      RAM_SIZE: "4G"               # guest 内存
+      CPU_CORES: "2"               # guest vCPU
+      CPU_MODEL: "la464"           # la464 / la664
+      DISK_IMAGE: /storage/data.qcow2
+      # VNC_PASSWORD: secret       # noVNC 密码（可选）
+      # ARGUMENTS: ""              # 追加 qemu 参数（可选）

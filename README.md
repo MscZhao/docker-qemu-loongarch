@@ -1,103 +1,86 @@
-# docker-loongnix
+# docker-qemu-loongarch
 
-一条 `docker run` 拉起 **Loongnix Server 23.3（loongarch64）虚拟机**——容器内置自编译 QEMU v10.2.0 + EDK2 UEFI 固件，默认 **kickstart 无人值守全自动安装**，浏览器 8006 端口双视图（串口 + noVNC）看安装/使用全过程。参照 [dockur/windows](https://github.com/dockur/windows) 的龙芯版。
+> Loongnix（loongarch64）虚拟机运行器 · 挂载镜像直跑 · noVNC 访问 · 对齐 [dockur/windows](https://github.com/dockur/windows) 体验
+
+容器内置自编译 **QEMU 11.1.0**（TCG 跨架构模拟）+ EDK2 UEFI 固件。挂载一个现成的磁盘镜像（qcow2/raw），`docker compose up -d` 拉起龙芯 VM：浏览器 **8006** 进 noVNC 图形控制台，**22** 端口 SSH 直达 guest。
 
 ## 快速开始
 
 ```bash
-docker build -t docker-loongnix .
+git clone https://github.com/MscZhao/docker-qemu-loongarch.git
+cd docker-qemu-loongarch
 
-# 默认 BOOT=install：首次启动自动下载 DVD ISO（~3.5G）并 kickstart 全自动安装
-docker run -d --name loongnix \
-  -p 8006:8006 -p 22:22 \
-  -v loongnix-storage:/storage \
-  docker-loongnix
+# 1. 准备磁盘镜像（放到仓库目录，见下方「镜像获取」）
+# 2. 启动
+docker compose up -d
 
-# 浏览器打开 http://localhost:8006 —— 安装期看「串口」视图（anaconda 文本安装），
-# TCG 纯软件模拟下安装约 30-90 分钟；装完自动重启进系统。
-# 之后: ssh root@localhost -p 22 （口令默认 lab，可用 ROOT_PASS 自定义）
+# 浏览器打开 http://localhost:8006 （noVNC 控制台）
+# ssh root@localhost （guest 内系统的口令）
 ```
 
-## 双视图 Web 控制台（:8006）
+`compose.yaml` 可配置 CPU、内存、挂载镜像等：
 
-| 视图 | 内容 | 阶段 |
-|---|---|---|
-| 串口（默认） | xterm.js ↔ QEMU `ttyS0`，anaconda 安装进度 / systemd 启动日志 / 登录控制台 | 全程 |
-| 图形 noVNC | virtio-gpu 图形控制台（UEFI/GRUB/图形界面） | 全程 |
+```yaml
+services:
+  loongarch-vm:
+    image: docker-qemu-loongarch
+    build: .
+    restart: unless-stopped
+    stop_grace_period: 2m
+    ports:
+      - "8006:8006"     # noVNC
+      - "22:22"         # SSH → guest
+    volumes:
+      - ./data.qcow2:/storage/data.qcow2     # 换成你的镜像
+    environment:
+      RAM_SIZE: "4G"
+      CPU_CORES: "2"
+      CPU_MODEL: "la464"
+      DISK_IMAGE: /storage/data.qcow2
+      # VNC_PASSWORD: secret
+```
 
-单端口 nginx 入口，两条 websockify 通道（VNC / 串口），无外部依赖。
-
-## 环境变量（对齐 dockur）
+## 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
+| `DISK_IMAGE` | `/storage/data.qcow2` | 磁盘镜像路径（容器内），qcow2/raw 自动识别 |
 | `RAM_SIZE` | `4G` | guest 内存 |
 | `CPU_CORES` | `2` | guest vCPU 数 |
-| `DISK_SIZE` | `64G` | 系统盘大小（install 模式生效；preinstalled 尽力扩容） |
-| `BOOT` | `install` | `install`=kickstart 全自动安装；`preinstalled`=官方预装 qcow2 快路径（下载 1.2G，免安装） |
-| `ROOT_PASS` | `lab` | root 口令（install 模式写入 kickstart；preinstalled 模式首启串口注入） |
-| `CPU_MODEL` | `la464` | QEMU CPU 型号，可换 `la664` |
-| `ARGUMENTS` | 空 | 追加给 qemu-system-loongarch64 的额外参数 |
+| `CPU_MODEL` | `la464` | QEMU CPU 型号（`la464` / `la664`） |
+| `VNC_PASSWORD` | 空 | noVNC 的 VNC 层密码（空=免认证） |
+| `ARGUMENTS` | 空 | 追加给 `qemu-system-loongarch64` 的额外参数 |
 
-## 两种引导模式
+## 镜像获取
 
-```
-/storage/data.qcow2 已存在 ─────────→ 直接 UEFI 开机（秒起）
-无盘 + BOOT=install（默认）→ 下载 DVD ISO（md5 校验）→ xorriso 抽 vmlinuz/initrd
-                             → kickstart 经 cpio 追加进 initrd（inst.ks=file:/ks.cfg）
-                             → -kernel 直启 anaconda 串口文本安装 → 装完 reboot 退出
-                             → 转 UEFI 磁盘启动
-无盘 + BOOT=preinstalled  → 下载官方 qcow2（md5 校验）→ convert/扩容
-                             → UEFI 开机，首启串口注入 ROOT_PASS + 放开 sshd root 登录
-```
+任选其一，得到一个 qcow2/raw 磁盘镜像后挂载即可：
 
-官方预装镜像实测 root 为**空口令**（sshd 拒绝空密登录），故 preinstalled 模式必须首启注入。
+1. **官方预装盘（最快）**：<https://pkg.loongnix.cn/loongnix-server/23.3/isos/Loongnix-Server-23.3.loongarch64.qcow2>
+   可直接挂载运行；注意其 root 为**空口令**（仅串口可免密登录，图形/noVNC 下请先经串口设置密码，或用下条方式装的镜像）
+2. **自行安装**：下载同目录 DVD ISO，在任意 QEMU/龙芯机器上安装出系统盘
+3. 也可以从本仓库历史版本的 `BOOT=install` 无人值守安装产物获得（已含 sshd/双控制台配置）
 
-## 性能说明（重要）
+## 与 dockur/windows 对齐的行为
 
-x86_64 宿主跨架构跑 loongarch64 只能 **TCG 纯软件模拟（无 KVM），慢约一个数量级**：
+- 一条命令拉起 VM；**主循环守护**——VM 意外退出自动重新拉起
+- **优雅关机**：`docker stop -t 90`（compose 已配 `stop_grace_period: 2m`）→ QMP `system_powerdown`
+- **KVM 自动探测**：真龙芯宿主透传 `--device /dev/kvm` 时硬加速，否则 TCG
+- 8006 单端口 Web 控制台（noVNC）；22 SSH hostfwd
+- 健康检查（QMP socket）；`/storage` 持久卷
+- 排障串口日志全量落 `/storage/serial.log`
 
-- kickstart 安装 30-90 分钟（属正常）
-- preinstalled 快路径跳过安装，5 分钟内可用（推荐先体验）
-- 真龙芯宿主可透传 `--device /dev/kvm`（当前镜像为 x86_64 构建，未来可出 loong64 版镜像 + `-cpu host`）
+## 性能须知
 
-## 架构
+x86_64 宿主跨架构为 **TCG 纯软件模拟（约原生 1/10）**：开机到登录 3-5 分钟属正常。真龙芯宿主加 `--device /dev/kvm` 可硬加速（需 loong64 版镜像构建）。
 
-```
-容器
-├─ entrypoint.sh            状态机（install / preinstalled / 已有盘直开）
-├─ qemu-system-loongarch64  v10.2.0 源码自编译（-machine virt -cpu la464）
-│   ├─ EDK2 QEMU_EFI.fd/QEMU_VARS.fd（pflash）
-│   ├─ virtio-blk 数据盘 /storage/data.qcow2
-│   ├─ slirp user-net，hostfwd tcp:22→guest:22
-│   ├─ VNC :5900 + 串口 chardev tcp:5702 + QMP unix sock（优雅关机/健康检查）
-│   └─ 安装期：-kernel/-initrd 直启 + DVD scsi-cd + -no-reboot（装完即退出转常态）
-├─ nginx :8006              双视图入口 + 静态资产
-├─ websockify :5700→5900    noVNC 通道
-└─ websockify :5701→5702    串口通道（xterm.js）
-```
+## 故障排查
 
-## 常用操作
+- **8006 黑屏**：确认镜像可引导（UEFI + grub2-efi）；看 `docker logs` 与 `/storage/serial.log`
+- **SSH 不通**：guest 需已配 sshd 且 root 允许密码登录（`PermitRootLogin yes`）
+- **改配置**：compose 改 env 后 `docker compose up -d` 重建即生效
 
-```bash
-# 优雅关机（entrypoint 捕获 SIGTERM → QMP system_powerdown）
-docker stop loongnix
+## 致谢
 
-# 重装（清空数据卷后重启容器即重新走安装）
-docker rm -f loongnix && docker volume rm loongnix-storage
-
-# 快路径体验
-docker run -d -p 8006:8006 -p 22:22 -v lx-fast:/storage -e BOOT=preinstalled docker-loongnix
-```
-
-## 已知限制
-
-- 仅本地构建，未推 registry（国内 docker.io 被墙，基础镜像 debian:trixie-slim 取自本地）
-- TCG 慢（见上）；串口视图同一时刻单客户端（websockify 通道独占 QEMU chardev）
-- 预装镜像根分区扩容依赖 guest 内 growpart，缺失时保持原始分区大小（多余空间闲置，无副作用）
-
-## 来源
-
-- 镜像: <https://pkg.loongnix.cn/loongnix-server/23.3/isos/>
-- 固件: Debian `qemu-efi-loongarch64`（edk2 `OvmfPkg/LoongArchVirt`）
-- [QEMU LoongArch virt 文档](https://www.qemu.org/docs/master/system/loongarch/virt.html)
+- [dockur/windows](https://github.com/dockur/windows) — 架构范本
+- [QEMU LoongArch virt](https://www.qemu.org/docs/master/system/loongarch/virt.html) · [edk2 LoongArchVirt](https://github.com/tianocore/edk2/tree/master/OvmfPkg/LoongArchVirt)
+- 历史研发全过程与踩坑记录见 [HANDOFF.md](HANDOFF.md)

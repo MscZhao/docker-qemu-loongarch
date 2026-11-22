@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# docker-loongnix — Loongnix-Server-23.3 (loongarch64) VM 容器入口
-# 状态机（dockur/windows 风格）：
-#   /storage/data.qcow2 存在 → 直接开机
-#   BOOT=install（默认）      → DVD ISO + kickstart 无人值守安装后开机
-#   BOOT=preinstalled         → 官方预装 qcow2 快路径
+# docker-qemu-loongarch — Loongnix(loongarch64) VM 运行器
+# 精简模型（对齐 dockur/windows 的运行期行为）：
+#   - 挂载现成磁盘镜像直跑（DISK_IMAGE 指定，qcow2/raw 自动识别）
+#   - 主循环守护：VM 意外退出自动拉起
+#   - SIGTERM → QMP system_powerdown 优雅关机（建议 docker stop -t 90）
+#   - KVM 自动探测（真龙芯宿主透传 /dev/kvm 时硬加速，回落 TCG）
+#   - 8006 仅 noVNC；串口全量日志落 /storage/serial.log 备排障
 set -Eeuo pipefail
 
 # ── 常量 ──────────────────────────────────────────────────────
@@ -14,179 +16,117 @@ WEB_DIR=/opt/web
 STORAGE=/storage
 RUN=/run/docker-loongnix
 
-ISO_NAME="Loongnix-Server-23.3-loongarch64-dvd.iso"
-ISO_URL="https://pkg.loongnix.cn/loongnix-server/23.3/isos/${ISO_NAME}"
-ISO_MD5="7e2bf56015dd63b194966b1428e08701"
-QCOW_NAME="Loongnix-Server-23.3.loongarch64.qcow2"
-QCOW_URL="https://pkg.loongnix.cn/loongnix-server/23.3/isos/${QCOW_NAME}"
-QCOW_MD5="4f958d74aad1f1f44741a141b31761fd"
-
-# ── 环境变量（对齐 dockur/windows）────────────────────────────
+# ── 环境变量 ──────────────────────────────────────────────────
 RAM_SIZE="${RAM_SIZE:-4G}"
 CPU_CORES="${CPU_CORES:-2}"
-DISK_SIZE="${DISK_SIZE:-64G}"
-BOOT="${BOOT:-install}"
-ROOT_PASS="${ROOT_PASS:-lab}"
-CPU_MODEL="${CPU_MODEL:-la464}"          # la464 保守 / la664 可选
+CPU_MODEL="${CPU_MODEL:-la464}"          # la464 / la664
+DISK_IMAGE="${DISK_IMAGE:-/storage/data.qcow2}"
+VNC_PASSWORD="${VNC_PASSWORD:-}"         # 空 = 免认证
 ARGUMENTS="${ARGUMENTS:-}"
 
-log() { printf '[docker-loongnix] %s %s\n' "$(date '+%F %T')" "$*"; }
-err() { log "ERROR: $*" >&2; }
+ts() { date '+%F %T'; }
+info() { printf '[loongarch] I %s %s\n' "$(ts)" "$*"; }
+warn() { printf '[loongarch] W %s %s\n' "$(ts)" "$*" >&2; }
+error() { printf '[loongarch] E %s %s\n' "$(ts)" "$*" >&2; }
 
-mkdir -p "$RUN" "$STORAGE"/{iso,install}
+mkdir -p "$RUN"
 
-# ── QMP 控制（优雅关机/健康检查）──────────────────────────────
-qmp() { # qmp <execute>
-  printf '{"execute":"qmp_capabilities"}\n{"execute":"%s"}\n' "$1" \
+# ── 磁盘检查与格式识别 ────────────────────────────────────────
+if [ ! -f "$DISK_IMAGE" ]; then
+  error "磁盘镜像不存在: $DISK_IMAGE"
+  error "请在 compose 中挂载镜像，例如:  - ./data.qcow2:/storage/data.qcow2"
+  error "镜像获取：官方预装盘 https://pkg.loongnix.cn/loongnix-server/23.3/isos/Loongnix-Server-23.3.loongarch64.qcow2（可直接挂载，root 为空口令）"
+  exit 1
+fi
+DISK_FMT=$("$QEMU_IMG" info "$DISK_IMAGE" | awk -F': *' '/^file format:/{print $2; exit}')
+[ "$DISK_FMT" = qcow2 ] || [ "$DISK_FMT" = raw ] || { error "不支持的镜像格式: $DISK_FMT（支持 qcow2/raw）"; exit 1; }
+info "磁盘: $DISK_IMAGE ($DISK_FMT, $(du -h "$DISK_IMAGE" | cut -f1))"
+
+# ── UEFI vars（可写副本，与镜像同目录）────────────────────────
+VARS="${DISK_IMAGE%/*}/vars.fd"
+[ -f "$VARS" ] || cp "$FW_DIR/QEMU_VARS.fd" "$VARS"
+
+# ── KVM 探测 ──────────────────────────────────────────────────
+ACCEL="tcg,thread=multi"
+if [ -c /dev/kvm ] && [ "$(uname -m)" = "loongarch64" ]; then
+  ACCEL="kvm:tcg,thread=multi"
+  info "检测到 /dev/kvm，启用 KVM（回落 TCG）"
+else
+  info "TCG 纯软件模拟（x86 宿主跨架构正常路径，性能约为原生 1/10）"
+fi
+
+# ── QMP（优雅关机/VNC 密码）───────────────────────────────────
+qmp() { # qmp <execute> [extra-json]
+  printf '{"execute":"qmp_capabilities"}\n{"execute":"%s"%s}\n' "$1" "${2:-}" \
     | timeout 5 socat - "UNIX-CONNECT:$RUN/qmp.sock" 2>/dev/null | tail -n1 || true
 }
 
 qemu_pid=""
+stopping=0
 shutdown_vm() {
+  stopping=1
   [ -n "$qemu_pid" ] || return 0
-  log "SIGTERM→QMP system_powerdown (pid $qemu_pid)"
+  info "SIGTERM → QMP system_powerdown (pid $qemu_pid)"
   qmp system_powerdown
-  for _ in $(seq 1 60); do
-    kill -0 "$qemu_pid" 2>/dev/null || { log "guest 已优雅关机"; return 0; }
+  for _ in $(seq 1 90); do
+    kill -0 "$qemu_pid" 2>/dev/null || { info "guest 已优雅关机"; return 0; }
     sleep 1
   done
-  err "30s 未退出，强杀"
+  error "90s 未退出，强杀"
   kill -9 "$qemu_pid" 2>/dev/null || true
 }
-trap shutdown_vm SIGTERM SIGINT EXIT
+trap 'shutdown_vm' SIGTERM SIGINT
+trap 'stopping=1; [ -n "$qemu_pid" ] && kill "$qemu_pid" 2>/dev/null || true' EXIT
 
-# ── Web 栈：nginx(8006) + websockify×2 + 串口复用器 ────────────
+set_vnc_password() {
+  [ -n "$VNC_PASSWORD" ] || return 0
+  qmp set_password "{\"arguments\":{\"protocol\":\"vnc\",\"password\":\"${VNC_PASSWORD//\"/\\\"}\"}}"
+  qmp expire_password '{"arguments":{"protocol":"vnc","time":"never"}}'
+}
+
+# ── Web 栈：nginx(8006) + websockify（仅 noVNC）───────────────
 start_web() {
-  # 串口: qemu unix-sock(全量 logfile) → mux :5702(多客户端+256K回放) ← websockify :5701 ← nginx /serial/ws
-  # VNC:  qemu :5900 ← websockify :5700 ← nginx /novnc/websockify
-  python3 /opt/serial_mux.py "$RUN/serial.sock" 127.0.0.1 5702 &
   websockify -D 127.0.0.1:5700 127.0.0.1:5900 >/dev/null 2>&1
-  websockify -D 127.0.0.1:5701 127.0.0.1:5702 >/dev/null 2>&1
   nginx -c "$WEB_DIR/nginx.conf" 2>/dev/null || nginx -s reload -c "$WEB_DIR/nginx.conf"
-  log "web 就绪: http://0.0.0.0:8006 (noVNC + serial)"
+  info "noVNC 就绪: http://0.0.0.0:8006"
 }
 
-# ── 下载 + md5 校验（断点续传）────────────────────────────────
-fetch() { # fetch <url> <dest> <md5>
-  local url=$1 dest=$2 want=$3 have
-  [ -f "$dest" ] || curl -fL --retry 5 --retry-delay 3 -C - -o "$dest" "$url"
-  have=$(md5sum "$dest" | awk '{print $1}')
-  if [ "$have" != "$want" ]; then
-    err "md5 不符: $dest ($have != $want)，删除重下"
-    rm -f "$dest"
-    curl -fL --retry 5 --retry-delay 3 -o "$dest" "$url"
-    have=$(md5sum "$dest" | awk '{print $1}')
-    [ "$have" = "$want" ] || { err "重下后 md5 仍不符"; return 1; }
-  fi
-}
-
-# ── 公共 QEMU 参数 ────────────────────────────────────────────
-# 常态与安装期共用：串口 chardev(logfile) / VNC(:5900) / QMP / hostfwd 22
-# 文章路线（QEMU 11 + EDK2 EFI 完整引导）实测参数
-qemu_common_args() {
-  cat <<EOF
--machine virt
--cpu ${CPU_MODEL}
--smp ${CPU_CORES}
--m ${RAM_SIZE}
--accel tcg,thread=multi
--device virtio-gpu-pci
--device nec-usb-xhci
--device usb-tablet
--device usb-kbd
--vnc 127.0.0.1:0
--chardev socket,id=ser0,path=$RUN/serial.sock,server=on,wait=off,logfile=$STORAGE/serial.log,logappend=on
--serial chardev:ser0
--qmp unix:$RUN/qmp.sock,server,nowait
--netdev user,id=n0,hostfwd=tcp::22-:22
--device virtio-net-pci,netdev=n0
--device virtio-rng-pci
-EOF
-}
-
-# ── 阶段1：kickstart 全自动安装（EFI 引导重制 ISO，文章路线）──
-# QEMU -kernel 直启在该内核上会确定性死锁（initramfs journald 后停滞），
-# 改为 EDK2 固件引导重制 ISO：grub.cfg 内置 console=ttyS0 + inst.ks=HTTP（nginx 本机提供）
-run_install() {
-  log "install: 校验/下载 DVD ISO (~3.5G)…"
-  fetch "$ISO_URL" "$STORAGE/iso/$ISO_NAME" "$ISO_MD5"
-
-  log "install: 渲染 kickstart（root 密码按 ROOT_PASS 设置）"
-  sed "s|@ROOT_PASS@|${ROOT_PASS//&/\\&}|g" /opt/ks.cfg > "$STORAGE/ks.cfg"
-
-  local AUTO_ISO="$STORAGE/iso/install-auto.iso"
-  if [ ! -f "$AUTO_ISO" ] || [ "$STORAGE/ks.cfg" -nt "$AUTO_ISO" ]; then
-    log "install: 重制 ISO（grub 内置 inst.ks 参数，约 2-3 分钟）"
-    /opt/remaster_iso.sh "$STORAGE/iso/$ISO_NAME" "$AUTO_ISO" "http://10.0.2.2:8006/ks.cfg"
-  fi
-
-  log "install: 创建 ${DISK_SIZE} 数据盘"
-  rm -f "$STORAGE/data.qcow2"
-  "$QEMU_IMG" create -f qcow2 "$STORAGE/data.qcow2" "$DISK_SIZE" >/dev/null
-
-  log "install: EFI 引导安装器（kickstart 无人值守，TCG 下预计 1-3 小时）"
+# ── VM 启动 ───────────────────────────────────────────────────
+run_vm() {
+  info "开机: $DISK_IMAGE (${CPU_MODEL}×${CPU_CORES}, ${RAM_SIZE})"
+  local vnc_args="-vnc 127.0.0.1:0"
+  [ -n "$VNC_PASSWORD" ] && vnc_args="-vnc 127.0.0.1:0,password=on"
+  # 串口仅落盘排障（/storage/serial.log），无 web 视图
   # shellcheck disable=SC2086
-  "$QEMU" $(qemu_common_args) \
+  "$QEMU" \
+    -machine virt -cpu "$CPU_MODEL" -smp "$CPU_CORES" -m "$RAM_SIZE" \
+    -accel "$ACCEL" \
     -drive if=pflash,format=raw,readonly=on,file="$FW_DIR/QEMU_EFI.fd" \
-    -drive if=pflash,format=raw,file="$STORAGE/vars.fd" \
-    -drive file="$STORAGE/data.qcow2",if=virtio,format=qcow2 \
-    -cdrom "$AUTO_ISO" \
-    -boot once=d \
-    -no-reboot $ARGUMENTS &
-  qemu_pid=$!
-  wait "$qemu_pid" || true
-  qemu_pid=""
-  log "install: 安装阶段结束（kickstart reboot → -no-reboot 退出）"
-}
-
-# ── 阶段1'：官方预装 qcow2 ────────────────────────────────────
-# 实测：官方 qcow2 root 为空口令（串口免密），sshd 拒空密 → 首启必须注入 ROOT_PASS
-run_preinstalled() {
-  log "preinstalled: 校验/下载官方 qcow2 (~1.2G)…"
-  fetch "$QCOW_URL" "$STORAGE/iso/$QCOW_NAME" "$QCOW_MD5"
-  log "preinstalled: 转换为数据盘"
-  rm -f "$STORAGE/data.qcow2"
-  "$QEMU_IMG" convert -O qcow2 "$STORAGE/iso/$QCOW_NAME" "$STORAGE/data.qcow2"
-  # 扩容虚拟盘（分区由首启注入脚本尽力 growpart）
-  local cur; cur=$("$QEMU_IMG" info -f qcow2 --output=json "$STORAGE/data.qcow2" | grep -o '"virtual-size": [0-9]*' | grep -o '[0-9]*')
-  if "$QEMU_IMG" resize "$STORAGE/data.qcow2" "$DISK_SIZE" >/dev/null 2>&1; then
-    log "preinstalled: 虚拟盘 ${cur}B → ${DISK_SIZE}"
-  else
-    log "preinstalled: 保持原始大小（DISK_SIZE 小于当前盘时不动）"
-  fi
-  INJECT=1
-}
-
-# ── 阶段2：UEFI 磁盘开机 ──────────────────────────────────────
-run_boot() {
-  log "boot: UEFI 启动 $STORAGE/data.qcow2"
-  # shellcheck disable=SC2086
-  "$QEMU" $(qemu_common_args) \
-    -drive if=pflash,format=raw,readonly=on,file="$FW_DIR/QEMU_EFI.fd" \
-    -drive if=pflash,format=raw,file="$STORAGE/vars.fd" \
-    -drive file="$STORAGE/data.qcow2",if=virtio,format=qcow2 \
+    -drive if=pflash,format=raw,file="$VARS" \
+    -drive file="$DISK_IMAGE",if=virtio,format="$DISK_FMT" \
+    -device virtio-gpu-pci \
+    -device nec-usb-xhci -device usb-tablet -device usb-kbd \
+    $vnc_args \
+    -chardev socket,id=ser0,path=$RUN/serial.sock,server=on,wait=off,logfile=$STORAGE/serial.log,logappend=on \
+    -serial chardev:ser0 \
+    -qmp unix:$RUN/qmp.sock,server,nowait \
+    -netdev user,id=n0,hostfwd=tcp::22-:22 \
+    -device virtio-net-pci,netdev=n0 \
+    -device virtio-rng-pci \
     $ARGUMENTS &
   qemu_pid=$!
-  if [ "${INJECT:-0}" = 1 ]; then
-    log "boot: 首启注入 ROOT_PASS/放开 sshd（约 3-5 分钟，期间串口视图被占用）"
-    python3 /opt/firstboot_inject.py 127.0.0.1 5702 "$ROOT_PASS" || err "首启注入未确认成功，请人工检查"
-    INJECT=0
-  fi
+  set_vnc_password
   wait "$qemu_pid" || true
   qemu_pid=""
-  log "boot: VM 已退出"
 }
 
-# ── 主流程 ────────────────────────────────────────────────────
-[ -f "$STORAGE/vars.fd" ] || cp "$FW_DIR/QEMU_VARS.fd" "$STORAGE/vars.fd"
+# ── 主循环（dockur 模型）：守护开机 ───────────────────────────
 start_web
-
-if [ -f "$STORAGE/data.qcow2" ]; then
-  log "检测到已有数据盘，跳过安装"
-elif [ "${BOOT,,}" = "preinstalled" ]; then
-  run_preinstalled
-else
-  run_install
-fi
-
-run_boot
+while [ "$stopping" = 0 ]; do
+  run_vm
+  if [ "$stopping" = 0 ]; then
+    warn "VM 意外退出，3 秒后自动拉起（docker stop -t 90 优雅关机）"
+    sleep 3
+  fi
+done
+info "容器退出"
