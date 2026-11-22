@@ -95,7 +95,7 @@ docker compose up -d
 
 Loongnix 25.x 提供可直跑的 livecd（hybrid），同样用 `ARGUMENTS: "-cdrom /storage/live.iso -boot once=d"` 挂载启动，无需磁盘，noVNC 直接进桌面（TCG 下较慢）。
 
-> 历史提示：本仓库曾内置 kickstart 无人值守自动安装（下载 ISO → 重制 → 全自动装），见 [HANDOFF.md](HANDOFF.md) 与 git 历史（`d3b34c4` 之前），需要无人值守场景可回溯。
+> 历史提示：本仓库曾内置 kickstart 无人值守自动安装（下载 ISO → 重制 → 全自动装），见 git 历史（`d3b34c4` 之前），需要无人值守场景可回溯。
 
 ## 与 dockur/windows 对齐的行为
 
@@ -120,4 +120,4 @@ x86_64 宿主跨架构为 **TCG 纯软件模拟（约原生 1/10）**：开机�
 
 - [dockur/windows](https://github.com/dockur/windows) — 架构范本
 - [QEMU LoongArch virt](https://www.qemu.org/docs/master/system/loongarch/virt.html) · [edk2 LoongArchVirt](https://github.com/tianocore/edk2/tree/master/OvmfPkg/LoongArchVirt)
-- 历史研发全过程与踩坑记录见 [HANDOFF.md](HANDOFF.md)
+- 研发全过程与踩坑记录保留在 git 历史提交信息中
