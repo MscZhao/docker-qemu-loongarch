@@ -36,6 +36,7 @@ COPY --from=builder /src/qemu/build/qemu-img /usr/local/bin/
 COPY --from=builder /src/qemu/pc-bios/ /usr/local/share/qemu/
 COPY firmware/ /firmware/
 COPY assets/web/ /opt/web/
+COPY assets/scripts/eject_on_reset.py /opt/eject_on_reset.py
 COPY entrypoint.sh /opt/entrypoint.sh
 
 RUN chmod +x /opt/entrypoint.sh && mkdir -p /storage /run/docker-loongnix

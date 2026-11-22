@@ -122,6 +122,10 @@ run_vm() {
 
 # ── 主循环（dockur 模型）：守护开机 ───────────────────────────
 start_web
+# 挂了安装 ISO 时自动监听：装完（guest RESET）自动弹出 ISO → 从磁盘引导，无需人工干预
+if printf '%s' "$ARGUMENTS" | grep -q -- '-cdrom'; then
+  python3 /opt/eject_on_reset.py "$RUN/qmp.sock" &
+fi
 while [ "$stopping" = 0 ]; do
   run_vm
   if [ "$stopping" = 0 ]; then
