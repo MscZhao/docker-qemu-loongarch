@@ -20,7 +20,8 @@ s = open(path).read()
 s = s.replace('set timeout=60', 'set timeout=3')
 s = s.replace('set default="1"', 'set default="0"')
 anchor = 'inst.stage2=hd:LABEL=Loongnix-Server-23.3-loongarch64 ro '
-extra = f'console=ttyS0,115200 inst.ks={ksurl} '
+# console=tty0 在前：内核日志镜像到图形控制台（noVNC 可见），ttyS0 在后为 anaconda 文本 UI 主界面
+extra = f'console=tty0 console=ttyS0,115200 inst.ks={ksurl} '
 assert anchor in s, 'grub.cfg 锚点未找到'
 s = s.replace(anchor, anchor + extra, 1)
 open(path, 'w').write(s)
