@@ -29,6 +29,8 @@ def pump(sec):
                 sys.stdout.write(d.decode("utf-8", "replace")); sys.stdout.flush()
         except socket.timeout:
             pass
+        except OSError:
+            print("\n[inject] 串口连接断开（qemu 已退出？）"); sys.exit(3)
     return
 
 def wait_for(pat, timeout):
