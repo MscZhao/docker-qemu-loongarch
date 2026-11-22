@@ -24,7 +24,9 @@
 <div id="screen"></div>
 <div id="status">连接中…</div>
 <script type="module">
-import RFB from '/vendor/novnc/lib/rfb.js';
+// jsdelivr +esm 打包版（npm 包 lib/ 是 CJS，浏览器 ESM 直用会崩）；实测导出为双层 default 嵌套
+import * as novnc from '/vendor/novnc/rfb-esm.js';
+const RFB = novnc.default?.default ?? novnc.default?.RFB ?? novnc.RFB;
 
 let rfb = null, status = document.getElementById('status');
 
