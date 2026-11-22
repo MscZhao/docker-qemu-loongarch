@@ -80,17 +80,9 @@ fetch() { # fetch <url> <dest> <md5>
   fi
 }
 
-# ── kickstart 渲染 + cpio 追加进 initrd（inst.ks=file:/ks.cfg）──
-bake_initrd() { # bake_initrd <initrd> <out>
-  local tmp; tmp=$(mktemp -d)
-  sed "s|@ROOT_PASS@|${ROOT_PASS//&/\\&}|g" /opt/ks.cfg > "$tmp/ks.cfg"
-  (cd "$tmp" && echo ks.cfg | cpio -o -H newc --quiet | gzip -9) > "$2"
-  cat "$1" >> "$2"
-  rm -rf "$tmp"
-}
-
 # ── 公共 QEMU 参数 ────────────────────────────────────────────
-# 安装期与常态共用：串口 chardev(:5702) / VNC(:5900) / QMP / hostfwd 22
+# 常态与安装期共用：串口 chardev(logfile) / VNC(:5900) / QMP / hostfwd 22
+# 文章路线（QEMU 11 + EDK2 EFI 完整引导）实测参数
 qemu_common_args() {
   cat <<EOF
 -machine virt
@@ -99,6 +91,9 @@ qemu_common_args() {
 -m ${RAM_SIZE}
 -accel tcg,thread=multi
 -device virtio-gpu-pci
+-device nec-usb-xhci
+-device usb-tablet
+-device usb-kbd
 -vnc 127.0.0.1:0
 -chardev socket,id=ser0,path=$RUN/serial.sock,server=on,wait=off,logfile=$STORAGE/serial.log,logappend=on
 -serial chardev:ser0
@@ -109,39 +104,39 @@ qemu_common_args() {
 EOF
 }
 
-# ── 阶段1：kickstart 安装（-kernel 直启，装完 guest reboot→qemu 退出）──
+# ── 阶段1：kickstart 全自动安装（EFI 引导重制 ISO，文章路线）──
+# QEMU -kernel 直启在该内核上会确定性死锁（initramfs journald 后停滞），
+# 改为 EDK2 固件引导重制 ISO：grub.cfg 内置 console=ttyS0 + inst.ks=HTTP（nginx 本机提供）
 run_install() {
-  log "install: 校验/下载 DVD ISO (~3G)…"
+  log "install: 校验/下载 DVD ISO (~3.5G)…"
   fetch "$ISO_URL" "$STORAGE/iso/$ISO_NAME" "$ISO_MD5"
 
-  log "install: 抽取 vmlinuz/initrd…"
-  rm -rf "$STORAGE/install"; mkdir -p "$STORAGE/install"
-  xorriso -osirrox on -indev "$STORAGE/iso/$ISO_NAME" \
-    -extract /images/pxeboot "$STORAGE/install" >/dev/null 2>&1
-  local kernel=$STORAGE/install/vmlinuz initrd=$STORAGE/install/initrd.img
-  [ -f "$kernel" ] && [ -f "$initrd" ] || { err "ISO 中未找到 images/pxeboot/{vmlinuz,initrd.img}"; return 1; }
+  log "install: 渲染 kickstart（root 密码按 ROOT_PASS 设置）"
+  sed "s|@ROOT_PASS@|${ROOT_PASS//&/\\&}|g" /opt/ks.cfg > "$STORAGE/ks.cfg"
 
-  log "install: 注入 kickstart (root 密码已按 ROOT_PASS 设置)"
-  bake_initrd "$initrd" "$STORAGE/install/initrd-ks.img"
+  local AUTO_ISO="$STORAGE/iso/install-auto.iso"
+  if [ ! -f "$AUTO_ISO" ] || [ "$STORAGE/ks.cfg" -nt "$AUTO_ISO" ]; then
+    log "install: 重制 ISO（grub 内置 inst.ks 参数，约 2-3 分钟）"
+    /opt/remaster_iso.sh "$STORAGE/iso/$ISO_NAME" "$AUTO_ISO" "http://10.0.2.2:8006/ks.cfg"
+  fi
 
   log "install: 创建 ${DISK_SIZE} 数据盘"
   rm -f "$STORAGE/data.qcow2"
   "$QEMU_IMG" create -f qcow2 "$STORAGE/data.qcow2" "$DISK_SIZE" >/dev/null
 
-  log "install: 启动 anaconda（串口文本模式，TCG 下预计 30-90 分钟）"
+  log "install: EFI 引导安装器（kickstart 无人值守，TCG 下预计 1-3 小时）"
   # shellcheck disable=SC2086
   "$QEMU" $(qemu_common_args) \
+    -drive if=pflash,format=raw,readonly=on,file="$FW_DIR/QEMU_EFI.fd" \
+    -drive if=pflash,format=raw,file="$STORAGE/vars.fd" \
     -drive file="$STORAGE/data.qcow2",if=virtio,format=qcow2 \
-    -device virtio-scsi-pci,id=scsi0 \
-    -drive file="$STORAGE/iso/$ISO_NAME",if=none,id=cd0,media=cdrom,format=raw,readonly=on \
-    -device scsi-cd,drive=cd0 \
-    -kernel "$kernel" -initrd "$STORAGE/install/initrd-ks.img" \
-    -append "earlycon=uart8250,mmio,0x1fe001e0 console=ttyS0,115200 inst.ks=file:/ks.cfg inst.stage2=hd:LABEL=Loongnix-Server-23.3-loongarch64 inst.text inst.geoloc=0" \
+    -cdrom "$AUTO_ISO" \
+    -boot once=d \
     -no-reboot $ARGUMENTS &
   qemu_pid=$!
   wait "$qemu_pid" || true
   qemu_pid=""
-  log "install: 安装阶段结束（guest reboot 退出）"
+  log "install: 安装阶段结束（kickstart reboot → -no-reboot 退出）"
 }
 
 # ── 阶段1'：官方预装 qcow2 ────────────────────────────────────
@@ -164,7 +159,6 @@ run_preinstalled() {
 
 # ── 阶段2：UEFI 磁盘开机 ──────────────────────────────────────
 run_boot() {
-  [ -f "$STORAGE/vars.fd" ] || cp "$FW_DIR/QEMU_VARS.fd" "$STORAGE/vars.fd"
   log "boot: UEFI 启动 $STORAGE/data.qcow2"
   # shellcheck disable=SC2086
   "$QEMU" $(qemu_common_args) \
@@ -184,6 +178,7 @@ run_boot() {
 }
 
 # ── 主流程 ────────────────────────────────────────────────────
+[ -f "$STORAGE/vars.fd" ] || cp "$FW_DIR/QEMU_VARS.fd" "$STORAGE/vars.fd"
 start_web
 
 if [ -f "$STORAGE/data.qcow2" ]; then
