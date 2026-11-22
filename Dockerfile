@@ -42,7 +42,7 @@ COPY assets/scripts/serial_mux.py /opt/serial_mux.py
 COPY assets/scripts/remaster_iso.sh /opt/remaster_iso.sh
 COPY entrypoint.sh /opt/entrypoint.sh
 
-RUN chmod +x /opt/entrypoint.sh && mkdir -p /storage /run/docker-loongnix
+RUN chmod +x /opt/entrypoint.sh /opt/remaster_iso.sh /opt/*.py && mkdir -p /storage /run/docker-loongnix
 EXPOSE 8006 22
 VOLUME /storage
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10m --retries=3 \
