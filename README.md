@@ -98,6 +98,6 @@ docker run -d -p 8006:8006 -p 22:22 -v lx-fast:/storage -e BOOT=preinstalled doc
 
 ## 来源
 
-- 镜像: <https://pkg.loongnix.cn/loongnix-server/23/isos/>
+- 镜像: <https://pkg.loongnix.cn/loongnix-server/23.3/isos/>
 - 固件: Debian `qemu-efi-loongarch64`（edk2 `OvmfPkg/LoongArchVirt`）
 - [QEMU LoongArch virt 文档](https://www.qemu.org/docs/master/system/loongarch/virt.html)

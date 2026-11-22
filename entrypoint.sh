@@ -15,10 +15,10 @@ STORAGE=/storage
 RUN=/run/docker-loongnix
 
 ISO_NAME="Loongnix-Server-23.3-loongarch64-dvd.iso"
-ISO_URL="https://pkg.loongnix.cn/loongnix-server/23/isos/${ISO_NAME}"
+ISO_URL="https://pkg.loongnix.cn/loongnix-server/23.3/isos/${ISO_NAME}"
 ISO_MD5="7e2bf56015dd63b194966b1428e08701"
 QCOW_NAME="Loongnix-Server-23.3.loongarch64.qcow2"
-QCOW_URL="https://pkg.loongnix.cn/loongnix-server/23/isos/${QCOW_NAME}"
+QCOW_URL="https://pkg.loongnix.cn/loongnix-server/23.3/isos/${QCOW_NAME}"
 QCOW_MD5="4f958d74aad1f1f44741a141b31761fd"
 
 # ── 环境变量（对齐 dockur/windows）────────────────────────────
