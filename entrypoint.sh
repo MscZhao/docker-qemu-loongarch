@@ -55,10 +55,11 @@ shutdown_vm() {
 }
 trap shutdown_vm SIGTERM SIGINT EXIT
 
-# ── Web 栈：nginx(8006) + websockify×2（VNC / 串口）────────────
+# ── Web 栈：nginx(8006) + websockify×2 + 串口复用器 ────────────
 start_web() {
-  # VNC:    qemu :5900 ← websockify :5700 ← nginx /novnc/websockify
-  # 串口:   qemu :5702 ← websockify :5701 ← nginx /serial/ws
+  # 串口: qemu unix-sock(全量 logfile) → mux :5702(多客户端+256K回放) ← websockify :5701 ← nginx /serial/ws
+  # VNC:  qemu :5900 ← websockify :5700 ← nginx /novnc/websockify
+  python3 /opt/serial_mux.py "$RUN/serial.sock" 127.0.0.1 5702 &
   websockify -D 127.0.0.1:5700 127.0.0.1:5900 >/dev/null 2>&1
   websockify -D 127.0.0.1:5701 127.0.0.1:5702 >/dev/null 2>&1
   nginx -c "$WEB_DIR/nginx.conf" 2>/dev/null || nginx -s reload -c "$WEB_DIR/nginx.conf"
@@ -99,7 +100,7 @@ qemu_common_args() {
 -accel tcg,thread=multi
 -device virtio-gpu-pci
 -vnc 127.0.0.1:0
--chardev socket,id=ser0,host=127.0.0.1,port=5702,server=on,wait=off
+-chardev socket,id=ser0,path=$RUN/serial.sock,server=on,wait=off,logfile=$STORAGE/serial.log,logappend=on
 -serial chardev:ser0
 -qmp unix:$RUN/qmp.sock,server,nowait
 -netdev user,id=n0,hostfwd=tcp::22-:22

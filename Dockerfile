@@ -38,6 +38,7 @@ COPY firmware/ /firmware/
 COPY assets/web/ /opt/web/
 COPY assets/kickstart/ks.cfg /opt/ks.cfg
 COPY assets/scripts/firstboot_inject.py /opt/firstboot_inject.py
+COPY assets/scripts/serial_mux.py /opt/serial_mux.py
 COPY entrypoint.sh /opt/entrypoint.sh
 
 RUN chmod +x /opt/entrypoint.sh && mkdir -p /storage /run/docker-loongnix
