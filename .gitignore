@@ -6,3 +6,4 @@ downloads/
 *.deb
 *.fd
 
+run/
