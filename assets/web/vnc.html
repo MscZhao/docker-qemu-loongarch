@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>noVNC · docker-loongnix</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin:0; height:100%; background:#000; overflow:hidden; }
+  #bar { position:fixed; top:0; right:0; z-index:10; display:flex; gap:6px;
+         padding:6px; background:rgba(16,16,20,.8); border-radius:0 0 0 8px; }
+  #bar button { padding:4px 12px; border:1px solid #2e2e38; border-radius:5px;
+                background:#1e1e26; color:#c8c8d0; cursor:pointer; font-size:12px; }
+  #screen { width:100%; height:100%; }
+  #screen canvas { position:absolute; left:0; top:0; transform-origin:0 0; }
+  #status { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+            color:#9a9aa6; font:14px sans-serif; background:rgba(0,0,0,.6);
+            padding:12px 24px; border-radius:8px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button onclick="connect()">重连</button>
+</div>
+<div id="screen"></div>
+<div id="status">连接中…</div>
+<script type="module">
+import RFB from '/vendor/novnc/lib/rfb.js';
+
+let rfb = null, status = document.getElementById('status');
+
+function connect() {
+  try { rfb?.disconnect(); } catch {}
+  status.style.display = 'block'; status.textContent = '连接中…';
+  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/novnc/websockify';
+  rfb = new RFB(document.getElementById('screen'), url, {
+    credentials: { password: '' },
+    scaleViewport: false, resizeSession: false,
+  });
+  rfb.addEventListener('connect', () => { status.style.display = 'none'; });
+  rfb.addEventListener('disconnect', e => {
+    status.style.display = 'block';
+    status.textContent = e.detail.clean ? '已断开，3s 后重连…' : '连接断开，3s 后重连…';
+    setTimeout(connect, 3000);
+  });
+  rfb.scaleViewport = true;   // noVNC 自带按窗口等比缩放
+}
+connect();
+</script>
+</body>
+</html>

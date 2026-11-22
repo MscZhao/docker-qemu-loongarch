@@ -1,0 +1,9 @@
+# 保持构建上下文精简（.cache/qemu-src ~1.5G、downloads/ ~7G 不进 build context）
+.git
+.cache
+downloads
+run
+*.iso
+*.qcow2
+*.deb
+*.fd

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width-width, initial-scale=1">
+<title>docker-loongnix · Loongnix Server 23.3 (loongarch64)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; height:100vh; display:flex; flex-direction:column;
+         background:#101014; color:#d8d8dc;
+         font:14px/1.4 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:10px 16px;
+           background:#17171c; border-bottom:1px solid #26262e; flex:0 0 auto; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header h1 small { color:#7c7c88; font-weight:400; margin-left:8px; }
+  nav { margin-left:auto; display:flex; gap:8px; }
+  nav button { padding:6px 18px; border:1px solid #2e2e38; border-radius:6px; cursor:pointer;
+               background:#1e1e26; color:#c8c8d0; font-size:13px; }
+  nav button.active { background:#2563eb; border-color:#2563eb; color:#fff; }
+  #view { flex:1 1 auto; position:relative; }
+  #view iframe { position:absolute; inset:0; width:100%; height:100%; border:0; background:#000; }
+  #hint { padding:6px 16px; background:#17171c; border-top:1px solid #26262e;
+          color:#7c7c88; font-size:12px; flex:0 0 auto; }
+  #st { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px;
+        background:#22c55e; box-shadow:0 0 6px #22c55e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Loongnix Server 23.3 <small>loongarch64 · QEMU TCG</small></h1>
+  <nav>
+    <button id="btn-serial" class="active" onclick="show('serial')">串口（安装主视图）</button>
+    <button id="btn-vnc" onclick="show('vnc')">图形 noVNC</button>
+  </nav>
+</header>
+<div id="view"></div>
+<footer id="hint"><span id="st"></span>安装期请看串口视图；装完自动重启进系统后，
+SSH: <b>ssh root@容器IP -p 22</b>（口令 = ROOT_PASS，默认 lab）</footer>
+<script>
+const view = document.getElementById('view');
+const tabs = { serial: 'serial.html', vnc: 'vnc.html' };
+let cur = null;
+function show(name) {
+  document.getElementById('btn-' + cur)?.classList.remove('active');
+  document.getElementById('btn-' + name).classList.add('active');
+  view.innerHTML = '';
+  const f = document.createElement('iframe');
+  f.src = tabs[name];
+  view.appendChild(f);
+  cur = name;
+}
+show('serial');
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+downloads/
+.cache/
+*.qcow2
+*.iso
+*.tar
+*.deb
+*.fd
+
