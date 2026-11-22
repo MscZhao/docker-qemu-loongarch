@@ -105,6 +105,7 @@ qemu_common_args() {
 -qmp unix:$RUN/qmp.sock,server,nowait
 -netdev user,id=n0,hostfwd=tcp::22-:22
 -device virtio-net-pci,netdev=n0
+-device virtio-rng-pci
 EOF
 }
 
@@ -135,7 +136,7 @@ run_install() {
     -drive file="$STORAGE/iso/$ISO_NAME",if=none,id=cd0,media=cdrom,format=raw,readonly=on \
     -device scsi-cd,drive=cd0 \
     -kernel "$kernel" -initrd "$STORAGE/install/initrd-ks.img" \
-    -append "earlycon=uart8250,mmio,0x1fe001e0 console=ttyS0,115200 inst.ks=file:/ks.cfg inst.text inst.geoloc=0" \
+    -append "earlycon=uart8250,mmio,0x1fe001e0 console=ttyS0,115200 inst.ks=file:/ks.cfg inst.stage2=hd:LABEL=Loongnix-Server-23.3-loongarch64 inst.text inst.geoloc=0" \
     -no-reboot $ARGUMENTS &
   qemu_pid=$!
   wait "$qemu_pid" || true
