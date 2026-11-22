@@ -53,12 +53,49 @@ services:
 
 ## 镜像获取
 
-任选其一，得到一个 qcow2/raw 磁盘镜像后挂载即可：
+官方镜像站：<https://pkg.loongnix.cn/loongnix-server/23.3/isos/>
 
-1. **官方预装盘（最快）**：<https://pkg.loongnix.cn/loongnix-server/23.3/isos/Loongnix-Server-23.3.loongarch64.qcow2>
-   可直接挂载运行；注意其 root 为**空口令**（仅串口可免密登录，图形/noVNC 下请先经串口设置密码，或用下条方式装的镜像）
-2. **自行安装**：下载同目录 DVD ISO，在任意 QEMU/龙芯机器上安装出系统盘
-3. 也可以从本仓库历史版本的 `BOOT=install` 无人值守安装产物获得（已含 sshd/双控制台配置）
+| 文件 | 大小 | md5 | 用途 |
+|---|---|---|---|
+| `Loongnix-Server-23.3.loongarch64.qcow2` | 1.2G | `4f958d74aad1f1f44741a141b31761fd` | 预装系统盘，挂载即用 |
+| `Loongnix-Server-23.3-loongarch64-dvd.iso` | 3.5G | `7e2bf56015dd63b194966b1428e08701` | 安装介质（见下） |
+
+### qcow2 预装盘：挂载即用
+
+```bash
+curl -O https://pkg.loongnix.cn/loongnix-server/23.3/isos/Loongnix-Server-23.3.loongarch64.qcow2
+# compose 中 volumes 挂载该文件即可
+```
+
+注意：官方预装盘 root 为**空口令**（sshd 拒绝空密登录）。noVNC 图形控制台可直接登录后在终端里 `passwd` 设密码、`sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && systemctl restart sshd` 开启 SSH。
+
+### DVD ISO：安装出自己的系统盘
+
+ISO 不能直接挂载为磁盘，两种用法：
+
+**① 本容器内图形安装（推荐）**——建空盘 + 挂 ISO，noVNC 里走安装向导：
+
+```bash
+# 1) 建空盘（一次性）
+docker run --rm -v "$PWD:/storage" docker-qemu-loongarch \
+  qemu-img create -f qcow2 /storage/data.qcow2 64G
+
+# 2) 把 ISO 放到同目录，compose 里追加安装参数启动：
+#    environment:
+#      ARGUMENTS: "-cdrom /storage/install.iso -boot once=d"
+#    volumes 中加一行: - ./Loongnix-Server-23.3-loongarch64-dvd.iso:/storage/install.iso:ro
+docker compose up -d
+# 3) 浏览器 8006 → anaconda 图形安装向导（分区时选自动即可）
+# 4) 装完去掉 ARGUMENTS 的 -cdrom/-boot，重启容器即从磁盘引导
+```
+
+**② 龙芯真机/其他 QEMU 环境安装**：ISO 刻录或直接挂载安装出系统盘后，把产出的 qcow2/raw 拿来挂载。
+
+### Live ISO：免安装直接体验
+
+Loongnix 25.x 提供可直跑的 livecd（hybrid），同样用 `ARGUMENTS: "-cdrom /storage/live.iso -boot once=d"` 挂载启动，无需磁盘，noVNC 直接进桌面（TCG 下较慢）。
+
+> 历史提示：本仓库曾内置 kickstart 无人值守自动安装（下载 ISO → 重制 → 全自动装），见 [HANDOFF.md](HANDOFF.md) 与 git 历史（`d3b34c4` 之前），需要无人值守场景可回溯。
 
 ## 与 dockur/windows 对齐的行为
 
