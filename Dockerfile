@@ -15,7 +15,7 @@ RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g; s|security.debian.org|mirror
 # QEMU configure 会自建 python venv；pip 走清华源防 pypi 被墙
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 # gitlab 直连实测可达且 tag 齐全；gitee 镜像已停在 v9.2.x 勿用；download.qemu.org 本环境被重置
-RUN git clone --depth 1 --branch v11.1.0 https://gitlab.com/qemu-project/qemu.git /src/qemu
+RUN git clone --depth 1 --branch v11.1.3 https://gitlab.com/qemu-project/qemu.git /src/qemu
 WORKDIR /src/qemu/build
 RUN ../configure --target-list=loongarch64-softmmu --disable-docs \
  && ninja -j"$(nproc)"
